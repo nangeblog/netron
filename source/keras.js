@@ -1,6 +1,7 @@
 /* jshint esversion: 6 */
 
 var keras = keras || {};
+var json = json || require('./json');
 
 keras.ModelFactory = class {
 
@@ -13,38 +14,21 @@ keras.ModelFactory = class {
             return buffer && buffer.length > signature.length && signature.every((v, i) => v === buffer[i]);
         }
         if (extension == 'json' && !identifier.endsWith('-symbol.json')) {
-            const contains = (buffer, text, length) => {
-                length = (length ? Math.min(buffer.length, length) : buffer.length) - text.length;
-                const match = Array.from(text).map((c) => c.charCodeAt(0));
-                for (let i = 0; i < length; i++) {
-                    if (match.every((c, index) => buffer[i + index] === c)) {
-                        return true;
-                    }
-                }
+            const tags = context.tags('json');
+            if (tags.has('mxnet_version')) {
                 return false;
-            };
-            if (!contains(context.buffer, '"mxnet_version":')) {
-                try {
-                    let root = keras.JsonParser.parse(context.text);
-                    if (root && root.nodes && root.arg_nodes && root.heads) {
-                        return false;
-                    }
-                    if (root && root.modelTopology) {
-                        root = root.modelTopology;
-                    }
-                    if (root && root.model_config) {
-                        root = root.model_config;
-                    }
-                    if (root && root.class_name) {
-                        return true;
-                    }
-                    if (root && Array.isArray(root) && root.every((manifest) => Array.isArray(manifest.weights) && Array.isArray(manifest.paths))) {
-                        return true;
-                    }
-                }
-                catch (err) {
-                    // continue regardless of error
-                }
+            }
+            if (tags.has('nodes') && tags.has('arg_nodes') && tags.has('heads')) {
+                return false;
+            }
+            if (tags.has('modelTopology')) {
+                return true;
+            }
+            if (tags.has('model_config') || (tags.has('class_name') && tags.has('config'))) {
+                return true;
+            }
+            if (tags.has('[].weights') && tags.has('[].paths')) {
+                return true;
             }
         }
         return false;
@@ -71,9 +55,10 @@ keras.ModelFactory = class {
                         const file = new hdf5.File(context.buffer);
                         rootGroup = file.rootGroup;
                         if (rootGroup.attribute('model_config') || rootGroup.attribute('layer_names')) {
-                            const json = rootGroup.attribute('model_config');
-                            if (json) {
-                                model_config = keras.JsonParser.parse(json);
+                            const model_config_json = rootGroup.attribute('model_config');
+                            if (model_config_json) {
+                                const reader = json.TextReader.create(model_config_json);
+                                model_config = reader.read();
                             }
                             backend = rootGroup.attribute('backend') || '';
                             const version = rootGroup.attribute('keras_version') || '';
@@ -191,7 +176,8 @@ keras.ModelFactory = class {
                         break;
                     }
                     case 'json': {
-                        const root = keras.JsonParser.parse(context.text);
+                        const reader = json.TextReader.create(context.buffer);
+                        const root = reader.read();
                         if (root && Array.isArray(root) && root.every((manifest) => Array.isArray(manifest.weights) && Array.isArray(manifest.paths))) {
                             format = 'TensorFlow.js Weights';
                             rootGroup = {};
